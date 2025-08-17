@@ -9,6 +9,8 @@ class MapManager {
     // Initialize the map
     initMap() {
         try {
+            console.log('Initializing map...');
+            
             // Initialize MapLibre GL JS map
             this.map = new maplibregl.Map({
                 container: 'map',
@@ -63,73 +65,105 @@ class MapManager {
         }
     }
 
+    // Calculate marker size based on lot size (subtle variation)
+    calculateMarkerSize(lotSize) {
+        // Base size similar to default markers
+        const baseSize = 12;
+        const maxSize = 80;
+        
+        // Default size for properties without lot size (condos, etc.)
+        if (!lotSize || lotSize <= 0) {
+            return baseSize;
+        }
+        
+        // Subtle size variation based on lot size
+        const scaleFactor = Math.min(lotSize * 8, maxSize - baseSize);
+        return Math.max(baseSize, Math.min(baseSize + scaleFactor, maxSize));
+    }
+
     // Add property markers to the map
     addPropertyMarkers(properties) {
+        console.log('addPropertyMarkers called with:', properties.length, 'properties');
+        
         if (!this.isInitialized) {
             console.error('Map not initialized');
+            return;
+        }
+
+        if (!properties || properties.length === 0) {
+            console.log('No properties to add');
             return;
         }
 
         // Clear existing markers
         this.clearMarkers();
 
-        properties.forEach(property => {
+        // Add each property marker
+        properties.forEach((property, index) => {
+            console.log(`Adding property marker ${index + 1}/${properties.length}:`, property);
             this.addPropertyMarker(property);
         });
 
         // Fit map to show all markers
-        if (properties.length > 0) {
-            this.fitBounds(properties);
-        }
+        this.fitBounds(properties);
     }
 
     // Add a single property marker
     addPropertyMarker(property) {
         try {
-            // Create marker element
+            console.log('Creating marker for property:', property.id, 'at coordinates:', property.coordinates);
+
+            // Verify coordinates are valid
+            if (!property.coordinates || property.coordinates.length !== 2) {
+                console.error('Invalid coordinates for property:', property.id, property.coordinates);
+                return;
+            }
+
+            // Calculate marker size based on lot size
+            const markerSize = this.calculateMarkerSize(property.lotSize);
+            console.log('Marker size for property', property.id, ':', markerSize);
+            
+            // Use elevation color if available, otherwise default blue
+            const markerColor = property.elevationColor || '#2196F3';
+            
+            // Create marker element with very simple styling
             const markerElement = document.createElement('div');
             markerElement.className = 'property-marker';
-            markerElement.innerHTML = `
-                <div class="marker-content">
-                    <div class="marker-price">${window.api.formatPrice(property.price)}</div>
-                    <div class="marker-beds">${property.bedrooms}br</div>
-                </div>
-            `;
-
-            // Add custom marker styles
             markerElement.style.cssText = `
-                background: white;
-                border: 2px solid #667eea;
-                border-radius: 8px;
-                padding: 8px;
-                font-size: 12px;
-                font-weight: bold;
-                color: #333;
+                width: ${markerSize}px;
+                height: ${markerSize}px;
+                background-color: ${markerColor};
+                border: 2px solid white;
+                border-radius: 50%;
                 cursor: pointer;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                transition: all 0.2s ease;
-                min-width: 80px;
-                text-align: center;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                transition: box-shadow 0.2s ease, border-width 0.2s ease;
             `;
 
-            // Add hover effects
+            // Add hover effect WITHOUT transform - use box-shadow and border instead
             markerElement.addEventListener('mouseenter', () => {
-                markerElement.style.transform = 'scale(1.1)';
-                markerElement.style.zIndex = '1000';
+                markerElement.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
+                markerElement.style.borderWidth = '3px';
             });
 
             markerElement.addEventListener('mouseleave', () => {
-                markerElement.style.transform = 'scale(1)';
-                markerElement.style.zIndex = '1';
+                markerElement.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
+                markerElement.style.borderWidth = '2px';
             });
 
-            // Create marker
-            const marker = new maplibregl.Marker(markerElement)
+            // Create marker - CRUCIAL: pass options object with element
+            const marker = new maplibregl.Marker({
+                element: markerElement,
+                anchor: 'center'
+            })
                 .setLngLat(property.coordinates)
                 .addTo(this.map);
 
-            // Add click handler
+            console.log('Marker created and added to map for property:', property.id);
+
+            // Add click handler for popup
             markerElement.addEventListener('click', () => {
+                console.log('Marker clicked for property:', property.id);
                 this.showPropertyPopup(property);
             });
 
@@ -147,6 +181,8 @@ class MapManager {
     // Show property popup
     showPropertyPopup(property) {
         try {
+            console.log('Showing popup for property:', property.id);
+
             // Create popup content
             const popupContent = `
                 <div class="popup-content">
@@ -157,6 +193,17 @@ class MapManager {
                         <span>${property.bathrooms} bath</span>
                         <span>${window.api.formatSqft(property.sqft)}</span>
                     </div>
+                    <div class="popup-lot-info">
+                        <strong>Lot Size:</strong> ${property.lotSize ? `${property.lotSize} acres` : 'N/A'}
+                    </div>
+                    ${property.elevation !== null ? `
+                        <div class="popup-elevation-info" style="color: ${property.elevationColor}; font-weight: bold; margin-top: 5px;">
+                            <strong>⛰️ Elevation:</strong> ${window.elevationService ? window.elevationService.formatElevation(property.elevation) : 'N/A'}
+                            ${property.relativeCityDiffElev !== undefined ? 
+                                `<br><small>(${property.relativeCityDiffElev > 0 ? '+' : ''}${property.relativeCityDiffElev.toFixed(0)} ft from city center)</small>` 
+                                : ''}
+                        </div>
+                    ` : ''}
                     <button class="popup-button" onclick="window.app.showPropertyModal(${property.id})">
                         View Details
                     </button>
@@ -185,6 +232,8 @@ class MapManager {
 
     // Clear all markers
     clearMarkers() {
+        console.log('Clearing', this.markers.length, 'markers');
+        
         this.markers.forEach(({ marker }) => {
             marker.remove();
         });
@@ -202,10 +251,14 @@ class MapManager {
         if (!properties || properties.length === 0) return;
 
         try {
+            console.log('Fitting bounds for', properties.length, 'properties');
+            
             const bounds = new maplibregl.LngLatBounds();
             
             properties.forEach(property => {
-                bounds.extend(property.coordinates);
+                if (property.coordinates && property.coordinates.length === 2) {
+                    bounds.extend(property.coordinates);
+                }
             });
 
             this.map.fitBounds(bounds, {
