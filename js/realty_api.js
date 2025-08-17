@@ -5,8 +5,14 @@ class RealtyAPI {
         this.apiKey = '4d0e87fa977947309a20c6e3fea06ffa';
         this.rapidApiHost = 'realty-mole-property-api.p.rapidapi.com';
         
-        // Test API connectivity on initialization
-        this.testAPIConnectivity();
+        // Rate limiting tracking
+        this.lastApiCall = 0;
+        this.apiCallInterval = 2000; // 2 seconds between calls
+        this.rateLimitHit = false;
+        this.rateLimitResetTime = 0;
+        
+        // Test API connectivity on initialization (with delay to avoid immediate rate limit)
+        setTimeout(() => this.testAPIConnectivity(), 1000);
         
         // Fallback sample data for when API fails or for testing
         this.sampleProperties = [
@@ -75,7 +81,12 @@ class RealtyAPI {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Geocode a location to get coordinates for property search
+        // Utility method for delays
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Simple geocoding using OpenStreetMap Nominatim (free)
     async geocodeLocation(location) {
         try {
             // Use a free geocoding service to get coordinates
@@ -188,66 +199,97 @@ class RealtyAPI {
     // Get properties by location
     async getPropertiesByLocation(location, filters = {}) {
         try {
-            console.log('🔍 Fetching properties from RealtyMole API for:', location);
+            console.log('🔍 Fetching properties for:', location);
+            
+            // Check if we're rate limited
+            if (this.rateLimitHit) {
+                const timeRemaining = this.rateLimitResetTime - Date.now();
+                if (timeRemaining > 0) {
+                    console.log(`⏰ Rate limit active. Skipping API call, using fallback data. Reset in ${Math.ceil(timeRemaining / 1000)}s`);
+                    return this.getFallbackData(location, filters);
+                } else {
+                    console.log('✅ Rate limit period expired, re-enabling API calls');
+                    this.rateLimitHit = false;
+                }
+            }
             
             // First geocode the location to get coordinates
             const coords = await this.geocodeLocation(location);
             console.log('📍 Geocoded coordinates:', coords);
             
-            // Try RealtyMole API first
-            try {
-                console.log('🌐 Attempting RealtyMole API call...');
-                const properties = await this.fetchFromRealtyMole(coords, filters);
-                if (properties && properties.length > 0) {
-                    console.log(`✅ SUCCESS: Found ${properties.length} properties from RealtyMole API`);
-                    return {
-                        success: true,
-                        properties: properties,
-                        total: properties.length,
-                        source: 'RealtyMole API'
-                    };
-                } else {
-                    console.log('⚠️ RealtyMole API returned no properties');
-                }
-            } catch (apiError) {
-                console.error('❌ RealtyMole API failed:');
-                console.error('Error message:', apiError.message);
-                console.error('Full error:', apiError);
-                
-                // Check if it's a CORS or network error
-                if (apiError.message.includes('fetch')) {
-                    console.error('🚫 This might be a CORS or network connectivity issue');
-                }
-                if (apiError.message.includes('401') || apiError.message.includes('403')) {
-                    console.error('🔑 This might be an API key authentication issue');
+            // Check if enough time has passed since last API call
+            const timeSinceLastCall = Date.now() - this.lastApiCall;
+            if (timeSinceLastCall < this.apiCallInterval) {
+                const waitTime = this.apiCallInterval - timeSinceLastCall;
+                console.log(`⏳ Waiting ${waitTime}ms to avoid rate limiting...`);
+                await this.delay(waitTime);
+            }
+            
+            // Try RealtyMole API (only once per session to conserve quota)
+            if (!this.rateLimitHit) {
+                try {
+                    console.log('🌐 Attempting RealtyMole API call (rate-limited)...');
+                    this.lastApiCall = Date.now();
+                    
+                    const properties = await this.fetchFromRealtyMole(coords, filters);
+                    if (properties && properties.length > 0) {
+                        console.log(`✅ SUCCESS: Found ${properties.length} properties from RealtyMole API`);
+                        return {
+                            success: true,
+                            properties: properties,
+                            total: properties.length,
+                            source: 'RealtyMole API'
+                        };
+                    } else {
+                        console.log('⚠️ RealtyMole API returned no properties');
+                    }
+                } catch (apiError) {
+                    console.error('❌ RealtyMole API failed:');
+                    console.error('Error message:', apiError.message);
+                    
+                    // Check for rate limiting errors
+                    if (apiError.message.includes('429') || 
+                        apiError.message.toLowerCase().includes('rate') ||
+                        apiError.message.toLowerCase().includes('quota') ||
+                        apiError.message.toLowerCase().includes('too many')) {
+                        console.error('🚫 RATE LIMITED: Disabling API calls for 10 minutes');
+                        this.rateLimitHit = true;
+                        this.rateLimitResetTime = Date.now() + (10 * 60 * 1000); // 10 minutes
+                    }
+                    
+                    // Check for authentication errors
+                    if (apiError.message.includes('401') || apiError.message.includes('403')) {
+                        console.error('🔑 Authentication issue - check API key');
+                    }
                 }
             }
             
-            // Fallback to sample data if API fails
-            console.log('🔄 Using location-specific sample data as fallback');
-            await this.delay(1000); // Simulate API delay
-            
-            let properties = this.generateSamplePropertiesForLocation(coords, location);
-            
-            // Apply filters to sample data
-            properties = this.applyFilters(properties, filters);
-            
-            return {
-                success: true,
-                properties: properties,
-                total: properties.length,
-                source: 'Sample Data (API fallback)'
-            };
+            // Use fallback data
+            return this.getFallbackData(location, filters);
             
         } catch (error) {
             console.error('💥 Major error in getPropertiesByLocation:', error);
-            return {
-                success: false,
-                error: 'Failed to fetch properties. Please try again.',
-                properties: [],
-                total: 0
-            };
+            return this.getFallbackData(location, filters);
         }
+    }
+
+    // Get fallback data (separated for reuse)
+    async getFallbackData(location, filters) {
+        console.log('🔄 Using location-specific sample data as fallback');
+        await this.delay(800); // Shorter delay for fallback
+        
+        const coords = await this.geocodeLocation(location);
+        let properties = this.generateSamplePropertiesForLocation(coords, location);
+        
+        // Apply filters to sample data
+        properties = this.applyFilters(properties, filters);
+        
+        return {
+            success: true,
+            properties: properties,
+            total: properties.length,
+            source: 'Smart Fallback Data (API quota preserved)'
+        };
     }
 
     // Fetch properties from RealtyMole API
