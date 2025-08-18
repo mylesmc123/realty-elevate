@@ -204,7 +204,7 @@ class MapManager {
                                 : ''}
                         </div>
                     ` : ''}
-                    <button class="popup-button" onclick="window.app.showPropertyModal(${property.id})">
+                    <button class="popup-button" onclick="window.app.showPropertyModal('${property.id}')">
                         View Details
                     </button>
                 </div>

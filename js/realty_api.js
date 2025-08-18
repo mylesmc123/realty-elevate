@@ -1,9 +1,8 @@
 class RealtyAPI {
     constructor() {
-        // RealtyMole API configuration
-        this.baseURL = 'https://realty-mole-property-api.p.rapidapi.com';
+        // Rentcast API configuration
+        this.baseURL = 'https://api.rentcast.io/v1';
         this.apiKey = '4d0e87fa977947309a20c6e3fea06ffa';
-        this.rapidApiHost = 'realty-mole-property-api.p.rapidapi.com';
         
         // Rate limiting tracking
         this.lastApiCall = 0;
@@ -109,13 +108,13 @@ class RealtyAPI {
         }
     }
 
-    // Transform RealtyMole data to our format
-    transformRealtyMoleProperty(property, index) {
-        // Handle different possible property structures from RealtyMole
-        const id = property.id || property.propertyId || `rm_${Date.now()}_${index}`;
-        const price = property.price || property.lastSalePrice || property.estimatedValue || 0;
+    // Transform Rentcast data to our format
+    transformRentcastProperty(property, index) {
+        // Handle Rentcast property structure
+        const id = property.id || property.listingId || `rc_${Date.now()}_${index}`;
+        const price = property.price || property.listPrice || 0;
         const address = property.formattedAddress || property.address || 
-                       `${property.streetAddress || ''} ${property.city || ''}, ${property.state || ''} ${property.zipCode || ''}`.trim();
+                       `${property.addressLine1 || ''} ${property.city || ''}, ${property.state || ''} ${property.zipCode || ''}`.trim();
         
         return {
             id: id,
@@ -123,22 +122,28 @@ class RealtyAPI {
             address: address,
             city: property.city || '',
             state: property.state || '',
-            zipCode: property.zipCode || property.zip || '',
-            bedrooms: property.bedrooms || property.beds || Math.floor(Math.random() * 4) + 1, // Random fallback
-            bathrooms: property.bathrooms || property.baths || Math.floor(Math.random() * 3) + 1, // Random fallback
+            zipCode: property.zipCode || '',
+            bedrooms: property.bedrooms || property.beds || Math.floor(Math.random() * 4) + 1,
+            bathrooms: property.bathrooms || property.baths || Math.floor(Math.random() * 3) + 1,
             sqft: property.squareFootage || property.livingArea || property.sqft || 1200,
             propertyType: this.normalizePropertyType(property.propertyType || property.type),
-            listingStatus: 'active',
+            listingStatus: property.status || 'active',
             coordinates: [
-                property.longitude || property.lng || (Math.random() * 0.2 - 0.1 - 97.7431), // Random around Austin if missing
-                property.latitude || property.lat || (Math.random() * 0.2 - 0.1 + 30.2672)   // Random around Austin if missing
+                property.longitude || property.lng || (Math.random() * 0.2 - 0.1 - 97.7431),
+                property.latitude || property.lat || (Math.random() * 0.2 - 0.1 + 30.2672)
             ],
             images: this.getPropertyImages(property),
             description: property.description || this.generateDescription(property),
             yearBuilt: property.yearBuilt || property.built || Math.floor(Math.random() * 30) + 1990,
-            lotSize: property.lotSize ? property.lotSize / 43560 : (Math.random() * 0.5 + 0.1), // Convert sq ft to acres or random
+            lotSize: property.lotSize ? Math.round((property.lotSize / 43560) * 100) / 100 : Math.round((Math.random() * 0.5 + 0.1) * 100) / 100,
             garage: property.garageSpaces || property.garage || Math.floor(Math.random() * 3)
         };
+    }
+
+    // Transform RealtyMole data to our format (keeping for compatibility)
+    transformRealtyMoleProperty(property, index) {
+        // This method now just calls the Rentcast transformer
+        return this.transformRentcastProperty(property, index);
     }
 
     // Get property images with fallbacks
@@ -228,23 +233,23 @@ class RealtyAPI {
             // Try RealtyMole API (only once per session to conserve quota)
             if (!this.rateLimitHit) {
                 try {
-                    console.log('🌐 Attempting RealtyMole API call (rate-limited)...');
+                    console.log('🌐 Attempting Rentcast API call...');
                     this.lastApiCall = Date.now();
                     
                     const properties = await this.fetchFromRealtyMole(coords, filters);
                     if (properties && properties.length > 0) {
-                        console.log(`✅ SUCCESS: Found ${properties.length} properties from RealtyMole API`);
+                        console.log(`✅ SUCCESS: Found ${properties.length} properties from Rentcast API`);
                         return {
                             success: true,
                             properties: properties,
                             total: properties.length,
-                            source: 'RealtyMole API'
+                            source: 'Rentcast API'
                         };
                     } else {
-                        console.log('⚠️ RealtyMole API returned no properties');
+                        console.log('⚠️ Rentcast API returned no properties');
                     }
                 } catch (apiError) {
-                    console.error('❌ RealtyMole API failed:');
+                    console.error('❌ Rentcast API failed:');
                     console.error('Error message:', apiError.message);
                     
                     // Check for rate limiting errors
@@ -292,97 +297,82 @@ class RealtyAPI {
         };
     }
 
-    // Fetch properties from RealtyMole API
+    // Fetch properties from Rentcast API (listings/sales only)
     async fetchFromRealtyMole(coords, filters) {
-        // Try multiple endpoints in order of preference
-        const endpoints = [
-            {
-                name: 'comparables',
-                url: `${this.baseURL}/comparables`,
-                params: {
-                    latitude: coords.lat.toString(),
-                    longitude: coords.lng.toString(),
-                    radius: '5',
-                    limit: '20',
-                    propertyType: 'All'
-                }
-            },
-            {
-                name: 'properties',
-                url: `${this.baseURL}/properties`,
-                params: {
-                    latitude: coords.lat.toString(),
-                    longitude: coords.lng.toString(),
-                    radius: '5',
-                    limit: '20'
-                }
-            },
-            {
-                name: 'rentEstimate',
-                url: `${this.baseURL}/rentEstimate`,
-                params: {
-                    latitude: coords.lat.toString(),
-                    longitude: coords.lng.toString()
-                }
+        try {
+            console.log('🏠 Searching for property listings for sale using Rentcast API...');
+            
+            // Use the Rentcast listings/sale endpoint
+            const url = `${this.baseURL}/listings/sale`;
+            
+            const params = new URLSearchParams({
+                latitude: coords.lat.toString(),
+                longitude: coords.lng.toString(),
+                radius: '10', // 10 mile radius
+                status: 'Active',
+                limit: '25'
+            });
+            
+            // Add price filters if specified
+            if (filters.minPrice) {
+                params.append('minPrice', filters.minPrice.toString());
             }
-        ];
-
-        for (const endpoint of endpoints) {
-            try {
-                console.log(`🔄 Trying ${endpoint.name} endpoint...`);
-                
-                const params = new URLSearchParams(endpoint.params);
-                const fullUrl = `${endpoint.url}?${params}`;
-                
-                console.log('📡 API Request URL:', fullUrl);
-                
-                const response = await fetch(fullUrl, {
-                    method: 'GET',
-                    headers: {
-                        'X-RapidAPI-Key': this.apiKey,
-                        'X-RapidAPI-Host': this.rapidApiHost,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                
-                console.log(`📡 ${endpoint.name} Response Status:`, response.status);
-                
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error(`❌ ${endpoint.name} Error Response:`, errorText);
-                    continue; // Try next endpoint
+            if (filters.maxPrice && filters.maxPrice !== Number.MAX_SAFE_INTEGER) {
+                params.append('maxPrice', filters.maxPrice.toString());
+            }
+            
+            const fullUrl = `${url}?${params}`;
+            console.log('📡 Rentcast API Request URL:', fullUrl);
+            
+            const response = await fetch(fullUrl, {
+                method: 'GET',
+                headers: {
+                    'accept': 'application/json',
+                    'X-Api-Key': this.apiKey
                 }
+            });
+            
+            console.log('📡 Rentcast API Response Status:', response.status);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('❌ Rentcast API Error Response:', errorText);
                 
-                const data = await response.json();
-                console.log(`📡 ${endpoint.name} Raw Response:`, data);
-                
-                // Transform response based on endpoint
-                let properties = [];
-                if (endpoint.name === 'comparables' && Array.isArray(data)) {
-                    properties = data;
-                } else if (endpoint.name === 'properties' && Array.isArray(data)) {
-                    properties = data;
-                } else if (data && data.comparables && Array.isArray(data.comparables)) {
-                    properties = data.comparables;
-                } else if (data && data.properties && Array.isArray(data.properties)) {
-                    properties = data.properties;
-                }
-                
-                if (properties.length > 0) {
-                    console.log(`✅ Successfully retrieved ${properties.length} properties from ${endpoint.name} endpoint`);
-                    return properties.map((property, index) => this.transformRealtyMoleProperty(property, index));
+                // Check for specific error types
+                if (response.status === 429) {
+                    throw new Error('Rate limit exceeded (429)');
+                } else if (response.status === 401 || response.status === 403) {
+                    throw new Error(`Authentication failed (${response.status})`);
                 } else {
-                    console.log(`⚠️ ${endpoint.name} endpoint returned no properties`);
+                    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
                 }
-                
-            } catch (error) {
-                console.error(`❌ ${endpoint.name} endpoint failed:`, error);
-                continue; // Try next endpoint
             }
+            
+            const data = await response.json();
+            console.log('📡 Rentcast API Raw Response:', data);
+            
+            // Transform the listings data
+            let properties = [];
+            if (Array.isArray(data)) {
+                properties = data;
+            } else if (data && data.listings && Array.isArray(data.listings)) {
+                properties = data.listings;
+            } else if (data && data.properties && Array.isArray(data.properties)) {
+                properties = data.properties;
+            }
+            
+            if (properties.length > 0) {
+                console.log(`✅ Found ${properties.length} property listings from Rentcast`);
+                return properties.map((property, index) => this.transformRentcastProperty(property, index));
+            } else {
+                console.log('⚠️ No property listings found in this area');
+                return [];
+            }
+            
+        } catch (error) {
+            console.error('❌ Rentcast API endpoint failed:', error);
+            throw error;
         }
-        
-        console.log('💔 All API endpoints failed');
-        return [];
     }
 
     // Apply filters to properties
@@ -437,7 +427,7 @@ class RealtyAPI {
                 images: [this.getRandomPropertyImage()],
                 description: `Beautiful property in ${cityName} with modern amenities and great location.`,
                 yearBuilt: Math.floor(Math.random() * 30) + 1990,
-                lotSize: Math.random() * 0.8 + 0.1, // 0.1 to 0.9 acres
+                lotSize: Math.round((Math.random() * 0.8 + 0.1) * 100) / 100, // 0.1 to 0.9 acres, rounded to 2 decimals
                 garage: Math.floor(Math.random() * 3)
             };
             
@@ -470,32 +460,37 @@ class RealtyAPI {
 
     // Test API connectivity
     async testAPIConnectivity() {
-        console.log('🧪 Testing RealtyMole API connectivity...');
+        console.log('🧪 Testing Rentcast API connectivity...');
         try {
-            // Try a simple API call to test connectivity
-            const response = await fetch(`${this.baseURL}/comparables?latitude=30.2672&longitude=-97.7431&radius=1&limit=1`, {
+            // Test the Rentcast sales endpoint specifically
+            const response = await fetch(`${this.baseURL}/listings/sale?city=Austin&state=TX&status=Active&limit=1`, {
                 method: 'GET',
                 headers: {
-                    'X-RapidAPI-Key': this.apiKey,
-                    'X-RapidAPI-Host': this.rapidApiHost,
-                    'Content-Type': 'application/json'
+                    'accept': 'application/json',
+                    'X-Api-Key': this.apiKey
                 }
             });
             
-            console.log('🧪 API Test Response Status:', response.status);
+            console.log('🧪 Rentcast API Test Response Status:', response.status);
             
             if (response.ok) {
-                console.log('✅ API connectivity test PASSED');
+                console.log('✅ Rentcast API connectivity test PASSED');
                 const data = await response.json();
-                console.log('✅ Sample API response:', data);
+                console.log('✅ Sample Rentcast API response:', data);
             } else {
-                console.error('❌ API connectivity test FAILED');
+                console.error('❌ Rentcast API connectivity test FAILED');
                 console.error('Status:', response.status, response.statusText);
                 const errorText = await response.text();
                 console.error('Error response:', errorText);
+                
+                if (response.status === 429) {
+                    console.error('🚫 Rate limited - too many requests');
+                } else if (response.status === 401 || response.status === 403) {
+                    console.error('🔑 Authentication failed - check API key');
+                }
             }
         } catch (error) {
-            console.error('❌ API connectivity test ERROR:', error);
+            console.error('❌ Rentcast API connectivity test ERROR:', error);
         }
     }
 
@@ -504,13 +499,13 @@ class RealtyAPI {
         try {
             await this.delay(500);
             
-            // Try to get detailed property info from RealtyMole API
+            // Try to get detailed property info from Rentcast API
             try {
-                const response = await fetch(`${this.baseURL}/property?id=${id}`, {
+                const response = await fetch(`${this.baseURL}/listings/sale/${id}`, {
                     method: 'GET',
                     headers: {
-                        'X-RapidAPI-Key': this.apiKey,
-                        'X-RapidAPI-Host': this.rapidApiHost
+                        'accept': 'application/json',
+                        'X-Api-Key': this.apiKey
                     }
                 });
                 
@@ -519,12 +514,12 @@ class RealtyAPI {
                     if (data) {
                         return {
                             success: true,
-                            property: this.transformRealtyMoleProperty(data, 0)
+                            property: this.transformRentcastProperty(data, 0)
                         };
                     }
                 }
             } catch (apiError) {
-                console.warn('Failed to fetch detailed property from API:', apiError);
+                console.warn('Failed to fetch detailed property from Rentcast API:', apiError);
             }
             
             // Fallback to sample data or cached property from previous search

@@ -99,6 +99,7 @@ class RealtyApp {
             this.properties.forEach((property, index) => {
                 const elevation = elevations[index];
                 property.elevation = elevation;
+                property.cityCenterElevation = cityCenterElevation; // Add city center elevation to each property
                 
                 if (elevation !== null && cityCenterElevation !== null) {
                     // Convert to feet and calculate difference
@@ -111,7 +112,7 @@ class RealtyApp {
                     property.elevationColor = '#00CC66'; // Default green
                 }
                 
-                console.log(`Property ${property.id}: elevation=${this.elevationService.formatElevation(elevation)}, relative diff=${property.relativeCityDiffElev?.toFixed(1)} ft`);
+                console.log(`Property ${property.id}: elevation=${this.elevationService.formatElevation(elevation)}, relative diff=${property.relativeCityDiffElev?.toFixed(1)} ft, city center=${this.elevationService.formatElevation(cityCenterElevation)}`);
             });
 
         } catch (error) {
@@ -217,10 +218,23 @@ class RealtyApp {
         try {
             console.log('Showing modal for property:', propertyId);
             
-            const result = await this.realty_api.getPropertyById(propertyId);
+            // First try to find the property in our current loaded properties
+            let property = null;
+            if (this.properties && this.properties.length > 0) {
+                property = this.properties.find(p => p.id == propertyId);
+                console.log('Found property in current properties:', property);
+            }
             
-            if (result.success) {
-                const property = result.property;
+            // If not found in current properties, try the API
+            if (!property) {
+                console.log('Property not found in current list, trying API...');
+                const result = await this.realty_api.getPropertyById(propertyId);
+                if (result.success) {
+                    property = result.property;
+                }
+            }
+            
+            if (property) {
                 const modalContent = document.getElementById('modalContent');
                 
                 modalContent.innerHTML = `
@@ -248,6 +262,12 @@ class RealtyApp {
                             <div class="detail-label">Year Built</div>
                             <div class="detail-value">${property.yearBuilt}</div>
                         </div>
+                        ${property.lotSize ? `
+                            <div class="detail-item">
+                                <div class="detail-label">Lot Size</div>
+                                <div class="detail-value">${property.lotSize} acres</div>
+                            </div>
+                        ` : ''}
                         ${property.garage ? `
                             <div class="detail-item">
                                 <div class="detail-label">Garage</div>
@@ -269,6 +289,14 @@ class RealtyApp {
                                     </div>
                                 </div>
                             ` : ''}
+                            ${property.cityCenterElevation !== null && property.cityCenterElevation !== undefined ? `
+                                <div class="detail-item">
+                                    <div class="detail-label">City Center Elevation</div>
+                                    <div class="detail-value">
+                                        ${this.elevationService.formatElevation(property.cityCenterElevation)}
+                                    </div>
+                                </div>
+                            ` : ''}
                         ` : ''}
                     </div>
                     <p style="margin-top: 1rem; line-height: 1.6; color: #666;">
@@ -278,7 +306,8 @@ class RealtyApp {
                 
                 this.showModal();
             } else {
-                this.showError(result.error);
+                console.error('Property not found:', propertyId);
+                this.showError('Property not found');
             }
         } catch (error) {
             console.error('Error showing property modal:', error);
